@@ -185,7 +185,7 @@ def render_navigation_sidebar() -> None:
             index=allowed_pages.index(
                 next(
                     (k for k, v in PAGES.items() if v == st.session_state.page),
-                    "Dashboard",
+                    "LOOKUP",
                 )
             ),
         )
