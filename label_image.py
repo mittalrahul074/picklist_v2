@@ -42,7 +42,7 @@ ORDER_IMAGE_FIELD   = "image_url"  # only used if IMAGE_ON_ORDER_DOC = True
 # ─────────────────────────────────────────────────────────────────────────────
 
 ORDER_ID_PATTERN = re.compile(r'\b(OD\d{15,20})\b')
-
+SKU_PATTERN = re.compile(r"\|\s*([^|]+?)\s*\|")
 
 # ── Firebase helpers ──────────────────────────────────────────────────────────
 
@@ -82,6 +82,23 @@ def download_image(url: str) -> bytes | None:
     except Exception:
         return None
 
+def get_barcode_image(sku: str) -> bytes | None:
+    """Generate a barcode image for the SKU using an online API."""
+    try:
+        # Using Barcode API from bwip-js (no API key required)
+        api_url = (
+            f"https://bwipjs-api.metafloor.com/"
+            f"?bcid=datamatrix"
+            f"&text={sku}"
+            f"&scale=4"
+            f"&paddingwidth=0"
+            f"&paddingheight=0"
+        )
+        resp = requests.get(api_url, timeout=5)
+        resp.raise_for_status()
+        return resp.content
+    except Exception:
+        return None
 
 # ── PDF processing ────────────────────────────────────────────────────────────
 
@@ -89,6 +106,18 @@ def extract_order_id(page_text: str) -> str | None:
     """Extract OD... order ID from label text."""
     match = ORDER_ID_PATTERN.search(page_text)
     return match.group(1) if match else None
+
+def extract_sku_flipkart(page_text: str) -> str | None:
+    match = SKU_PATTERN.search(page_text)
+    if match:
+        sku = match.group(1).strip()
+        #remove 1 & 2 nd word
+        parts = sku.split()
+        if len(parts) > 2:
+            sku = " ".join(parts[2:])
+        # remove first character
+        sku = sku[1:]
+        return sku
 
 
 def stamp_image_on_page(page: fitz.Page, img_bytes: bytes) -> bool:
@@ -103,23 +132,20 @@ def stamp_image_on_page(page: fitz.Page, img_bytes: bytes) -> bool:
 
         # Flipkart label: SKU row is roughly 65-85% down the page
         # Place image in the right portion of the description cell
-        img_size  = min(w, h) * 0.18   # ~18% of the smaller dimension
+        # ~18% of the smaller dimension
         margin    = w * 0.02
+        
+        img_width = 40
+        img_height = 40
 
-        x1 = w - img_size - margin
+        x1 = w - img_width - margin
         y1 = h * 0.64
-        x2 = x1 + img_size
-        y2 = y1 + img_size
+        x2 = x1 + img_width
+        y2 = y1 + img_height
 
         img_rect = fitz.Rect(x1, y1, x2, y2)
 
-        # Convert image to PNG for reliable embedding
-        pil_img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-        png_buf = io.BytesIO()
-        pil_img.save(png_buf, format="PNG")
-        png_bytes = png_buf.getvalue()
-
-        page.insert_image(img_rect, stream=png_bytes, keep_proportion=True)
+        page.insert_image(img_rect, stream=img_bytes, keep_proportion=True)
 
         # Draw a thin border around the image
         page.draw_rect(img_rect, color=(0.7, 0.7, 0.7), width=0.5)
@@ -127,9 +153,49 @@ def stamp_image_on_page(page: fitz.Page, img_bytes: bytes) -> bool:
 
     except Exception as e:
         return False
+    
+def process_pdf(pdf_bytes: bytes, platform: str) -> tuple[bytes, list[dict]]:
+    """Main processing function that handles different platforms."""
+    if platform == "flipkart":
+        return process_pdf_flipkart(pdf_bytes)
+    elif platform == "meesho":
+        return process_pdf_meesho(pdf_bytes)
+    
+def prepare_barcode_image(
+    img_bytes: bytes,
+    padding: int = 20,
+    background="white"
+) -> bytes:
+    """
+    Add white background + quiet zone around barcode/QR image.
+    Returns cleaned PNG bytes.
+    """
 
+    img = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
 
-def process_pdf(uploaded_bytes: bytes) -> tuple[bytes, list[dict]]:
+    # Create white background
+    bg = Image.new(
+        "RGB",
+        (
+            img.width + padding * 2,
+            img.height + padding * 2
+        ),
+        background
+    )
+
+    # Paste barcode in center
+    bg.paste(img, (padding, padding), img)
+
+    output = io.BytesIO()
+    bg.save(output, format="PNG")
+
+    return output.getvalue()
+    
+def process_pdf_meesho(pdf_bytes: bytes) -> tuple[bytes, list[dict]]:
+    """Placeholder for Meesho PDF processing logic. Currently returns unmodified PDF."""
+    return pdf_bytes, [{"page": i + 1, "order_id": "—", "status": "⚠️ Meesho processing not implemented"} for i in range(len(list(pdfplumber.open(io.BytesIO(pdf_bytes)).pages)))]
+
+def process_pdf_flipkart(uploaded_bytes: bytes) -> tuple[bytes, list[dict]]:
     """
     Process every page of the label PDF:
       1. Extract Order ID
@@ -150,26 +216,32 @@ def process_pdf(uploaded_bytes: bytes) -> tuple[bytes, list[dict]]:
 
     for i, page in enumerate(doc):
         text = page_texts[i] if i < len(page_texts) else ""
-        order_id = extract_order_id(text)
+        sku = extract_sku_flipkart(text)
 
-        if not order_id:
-            results.append({"page": i + 1, "order_id": "—", "sku": "—", "status": "⚠️ Order ID not found"})
+        if not sku:
+            results.append({"page": i + 1, "order_id": "—", "sku": "—", "status": "⚠️ SKU not found"})
             continue
 
-        sku, image_url = fetch_image_url(order_id)
-
-        if not image_url:
-            results.append({"page": i + 1, "order_id": order_id, "sku": sku or "—", "status": "⚠️ No image in DB"})
-            continue
-
-        img_bytes = download_image(image_url)
+        # img_bytes = download_image(image_url)
+        img_bytes = get_barcode_image(sku)  # Use barcode image instead of product image
+        #save image for debugging in images folder with filename as order_id.png
+        # with tempfile.TemporaryDirectory() as tmpdir:
+        #     img_path = os.path.join(tmpdir, f"{sku}.png")
+        #     with open(img_path, "wb") as f:
+        #         f.write(img_bytes)
+        #     st.image(img_path, caption=f"Barcode for {sku}", width=200)
+        if img_bytes:
+            img_bytes = prepare_barcode_image(
+                img_bytes,
+                padding=25
+        )
         if not img_bytes:
-            results.append({"page": i + 1, "order_id": order_id, "sku": sku, "status": "❌ Image download failed"})
+            results.append({"page": i + 1, "sku": sku, "status": "❌ Image download failed"})
             continue
 
         ok = stamp_image_on_page(page, img_bytes)
         status = "✅ Image added" if ok else "❌ Stamp failed"
-        results.append({"page": i + 1, "order_id": order_id, "sku": sku, "status": status})
+        results.append({"page": i + 1, "sku": sku, "status": status})
 
     output_buf = io.BytesIO()
     doc.save(output_buf)
@@ -229,9 +301,17 @@ def render_label_stamper_panel():
     total_pages = len(list(pdfplumber.open(io.BytesIO(pdf_bytes)).pages))
     st.success(f"📄 Loaded **{total_pages} label(s)**")
 
+    platform = st.radio(
+        "Select Platform",
+        ["flipkart", "meesho"],
+        index=0,
+        format_func=lambda x: x.capitalize(),
+        horizontal=True
+    )
+
     if st.button("🚀 Process Labels", type="primary"):
         with st.spinner(f"Processing {total_pages} labels… fetching images…"):
-            modified_pdf, results = process_pdf(pdf_bytes)
+            modified_pdf, results = process_pdf(pdf_bytes,platform)
 
         # Results table
         ok_count = sum(1 for r in results if "✅" in r["status"])
@@ -241,8 +321,7 @@ def render_label_stamper_panel():
             color = "#d4edda" if "✅" in r["status"] else "#fff3cd" if "⚠️" in r["status"] else "#f8d7da"
             st.markdown(
                 f'<div class="result-box" style="background:{color}">'
-                f'<b>Page {r["page"]}</b> &nbsp;|&nbsp; {r["order_id"]} &nbsp;|&nbsp; '
-                f'SKU: {r["sku"]} &nbsp;|&nbsp; {r["status"]}'
+                f'<b>Page {r["page"]}</b> &nbsp;|&nbsp; {r["sku"]} &nbsp;|&nbsp; '
                 f'</div>',
                 unsafe_allow_html=True,
             )
