@@ -173,7 +173,7 @@ def stamp_image_on_page(page: fitz.Page, img_bytes: bytes) -> bool:
         # Flipkart label: SKU row is roughly 65-85% down the page
         # Place image in the right portion of the description cell
         # ~18% of the smaller dimension
-        margin    = w * 0.02
+        margin    = w * 0.04
         
         img_width = 40
         img_height = 40
@@ -294,6 +294,31 @@ def prepare_barcode_image_meesho(
     bg.save(output, format="PNG")
 
     return output.getvalue()
+
+def crop_pdf(pdf_bytes: bytes,left,top,right,bottom) -> bytes:
+    """
+    Crop the PDF to remove extra margins (specific to Meesho labels).
+    This helps ensure the stamped image fits well within the label area.
+    """
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+
+    for page in doc:
+        rect = page.rect
+        w, h = rect.width, rect.height
+
+        # Define crop box (adjust these values based on your label layout)
+        crop_rect = fitz.Rect(
+            w * left,  # left
+            h * top,  # top
+            w * right,  # right
+            h * bottom   # bottom
+        )
+        page.set_cropbox(crop_rect)
+
+    output_buf = io.BytesIO()
+    doc.save(output_buf)
+    doc.close()
+    return output_buf.getvalue()
     
 def process_pdf_meesho(uploaded_bytes: bytes) -> tuple[bytes, list[dict]]:
     """
@@ -303,6 +328,8 @@ def process_pdf_meesho(uploaded_bytes: bytes) -> tuple[bytes, list[dict]]:
       3. Stamp image onto the page
     Returns (modified_pdf_bytes, results_log).
     """
+
+    uploaded_bytes = crop_pdf(uploaded_bytes, 0, 0, 1, 0.5)
     results = []
 
     # --- Extract text (pdfplumber is better for text positions) ---
@@ -356,6 +383,7 @@ def process_pdf_flipkart(uploaded_bytes: bytes) -> tuple[bytes, list[dict]]:
       3. Stamp image onto the page
     Returns (modified_pdf_bytes, results_log).
     """
+    uploaded_bytes = crop_pdf(uploaded_bytes, 0.31, 0.03, 0.68, 0.46)
     results = []
 
     # --- Extract text (pdfplumber is better for text positions) ---
@@ -386,7 +414,7 @@ def process_pdf_flipkart(uploaded_bytes: bytes) -> tuple[bytes, list[dict]]:
         if img_bytes:
             img_bytes = prepare_barcode_image(
                 img_bytes,
-                padding=25
+                padding=15
         )
         if not img_bytes:
             results.append({"page": i + 1, "sku": sku, "status": "❌ Image download failed"})
