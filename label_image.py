@@ -118,6 +118,46 @@ def extract_sku_flipkart(page_text: str) -> str | None:
         # remove first character
         sku = sku[1:]
         return sku
+    
+def extract_sku_meesho(page_text: str) -> str | None:
+    lines = page_text.split("\n")
+
+    for i, line in enumerate(lines):
+        if "SKU" in line and "Order No" in line:
+            data_line = lines[i + 1].strip()
+
+            # Step 1: Extract Order ID (most reliable)
+            order_match = re.search(r'\d+_\d+', data_line)
+            if not order_match:
+                return None
+
+            order_id = order_match.group()
+
+            # Step 2: Remove order id from line
+            left_part = data_line.replace(order_id, "").strip()
+
+            # Step 3: Extract qty (number before last word = color)
+            qty_match = re.search(r'(\d+)\s+\w+$', left_part)
+            if not qty_match:
+                return None
+
+            qty = qty_match.group(1)
+
+            # Step 4: Remove "qty + color" from end
+            left_part = re.sub(r'\d+\s+\w+$', '', left_part).strip()
+
+            # Step 5: Now remove SIZE (last remaining word)
+            # remaining = SKU + SIZE → remove last word
+            parts = left_part.split()
+            if len(parts) < 2:
+                return None
+
+            parts = parts[:-2]  # remove last word (size)
+            sku = " ".join(parts)  # everything except last word = SKU
+            #split sku " "(space) and remove the last word
+            return sku
+
+    return None
 
 
 def stamp_image_on_page(page: fitz.Page, img_bytes: bytes) -> bool:
@@ -153,7 +193,41 @@ def stamp_image_on_page(page: fitz.Page, img_bytes: bytes) -> bool:
 
     except Exception as e:
         return False
-    
+
+def stamp_image_on_page_meesho(page: fitz.Page, img_bytes: bytes) -> bool:
+    """
+    Insert a small product image into the label page.
+    Targets the blank space in the SKU description row.
+    Returns True if successful.
+    """
+    try:
+        rect = page.rect
+        w, h = rect.width, rect.height
+
+        # Meesho label: use a larger image size than Flipkart
+        margin = w * 0.02
+        max_img_size = min(w * 0.26, h * 0.26, 170)
+
+        img_width = max_img_size
+        img_height = max_img_size
+
+        x1 = w - (img_width*4.1)
+        y1 = h * 0.35
+        x2 = x1 + img_width
+        y2 = y1 + img_height
+
+        img_rect = fitz.Rect(x1, y1, x2, y2)
+
+        page.insert_image(img_rect, stream=img_bytes, keep_proportion=True)
+
+        # Draw a thin border around the image
+        page.draw_rect(img_rect, color=(0.7, 0.7, 0.7), width=0.5)
+        return True
+
+    except Exception as e:
+        return False
+
+
 def process_pdf(pdf_bytes: bytes, platform: str) -> tuple[bytes, list[dict]]:
     """Main processing function that handles different platforms."""
     if platform == "flipkart":
@@ -190,10 +264,89 @@ def prepare_barcode_image(
     bg.save(output, format="PNG")
 
     return output.getvalue()
+
+def prepare_barcode_image_meesho(
+    img_bytes: bytes,
+    padding: int = 20,
+    background="white"
+) -> bytes:
+    """
+    Add white background + quiet zone around barcode/QR image.
+    Returns cleaned PNG bytes.
+    """
+
+    img = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
+
+    # Create white background
+    bg = Image.new(
+        "RGB",
+        (
+            img.width + padding * 2,
+            img.height + padding * 2
+        ),
+        background
+    )
+
+    # Paste barcode in center
+    bg.paste(img, (padding, padding), img)
+
+    output = io.BytesIO()
+    bg.save(output, format="PNG")
+
+    return output.getvalue()
     
-def process_pdf_meesho(pdf_bytes: bytes) -> tuple[bytes, list[dict]]:
-    """Placeholder for Meesho PDF processing logic. Currently returns unmodified PDF."""
-    return pdf_bytes, [{"page": i + 1, "order_id": "—", "status": "⚠️ Meesho processing not implemented"} for i in range(len(list(pdfplumber.open(io.BytesIO(pdf_bytes)).pages)))]
+def process_pdf_meesho(uploaded_bytes: bytes) -> tuple[bytes, list[dict]]:
+    """
+    Process every page of the label PDF:
+      1. Extract Order ID
+      2. Fetch image URL from Firebase
+      3. Stamp image onto the page
+    Returns (modified_pdf_bytes, results_log).
+    """
+    results = []
+
+    # --- Extract text (pdfplumber is better for text positions) ---
+    page_texts = []
+    with pdfplumber.open(io.BytesIO(uploaded_bytes)) as plumber_pdf:
+        for p in plumber_pdf.pages:
+            page_texts.append(p.extract_text() or "")
+
+    # --- Modify PDF (PyMuPDF for image stamping) ---
+    doc = fitz.open(stream=uploaded_bytes, filetype="pdf")
+
+    for i, page in enumerate(doc):
+        text = page_texts[i] if i < len(page_texts) else ""
+        sku = extract_sku_meesho(text)
+
+        if not sku:
+            results.append({"page": i + 1, "order_id": "—", "sku": "—", "status": "⚠️ SKU not found"})
+            continue
+
+        # img_bytes = download_image(image_url)
+        img_bytes = get_barcode_image(sku)  # Use barcode image instead of product image
+        #save image for debugging in images folder with filename as order_id.png
+        # with tempfile.TemporaryDirectory() as tmpdir:
+        #     img_path = os.path.join(tmpdir, f"{sku}.png")
+        #     with open(img_path, "wb") as f:
+        #         f.write(img_bytes)
+        #     st.image(img_path, caption=f"Barcode for {sku}", width=200)
+        if img_bytes:
+            img_bytes = prepare_barcode_image_meesho(
+                img_bytes,
+                padding=5
+        )
+        if not img_bytes:
+            results.append({"page": i + 1, "sku": sku, "status": "❌ Image download failed"})
+            continue
+
+        ok = stamp_image_on_page_meesho(page, img_bytes)
+        status = "✅ Image added" if ok else "❌ Stamp failed"
+        results.append({"page": i + 1, "sku": sku, "status": status})
+
+    output_buf = io.BytesIO()
+    doc.save(output_buf)
+    doc.close()
+    return output_buf.getvalue(), results
 
 def process_pdf_flipkart(uploaded_bytes: bytes) -> tuple[bytes, list[dict]]:
     """

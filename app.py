@@ -209,25 +209,8 @@ else:
 
     page = st.session_state.page
 
-    if page == PAGE_DASHBOARD:
-        render_dashboard()
-    elif page == PAGE_ADMIN:
-        render_admin_panel()
-    elif page == PAGE_PICKER:
-        render_picker_validator_panel("picker")
-    elif page == PAGE_VALIDATOR:
-        render_picker_validator_panel("validator")
-    elif page == PAGE_SEARCH:
-        render_search_panel()
-    elif page == PAGE_RETURN_SCAN:
-        render_return_scan_panel()
-    elif page == PAGE_ACCEPT_RETURNS:
-        render_accept_returns_panel()
-    elif page == PAGE_CANCELLED_LIST:
-        render_cancelled_list_panel()
-    elif page == PAGE_OUT_OF_STOCK_LIST:
-        render_out_of_stock_list_panel(st.session_state.user_type)
-    elif page == LOOKUP:
+    
+    if page == LOOKUP:
         render_product_lookup_panel()
     elif page == PAGE_DELETE:
         render_delete_panel()
