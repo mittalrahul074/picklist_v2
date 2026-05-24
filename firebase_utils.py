@@ -36,3 +36,11 @@ def add_order(order_id, sku, quantity,status,picked_by,validated_by,platform,cre
 def get_orders():
     orders = db.collection("orders").stream()
     return [{order.id: order.to_dict()} for order in orders]
+
+def get_sku_from_order(order_id):
+    doc_ref = db.collection("orders").document(order_id)
+    doc = doc_ref.get()
+    if doc.exists:
+        return doc.to_dict().get("sku")
+    else:
+        return None

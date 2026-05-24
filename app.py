@@ -159,41 +159,11 @@ def render_navigation_sidebar() -> None:
         st.markdown("---")
 
         # =========================
-        # Party Selector
-        # =========================
-        allowed_party = get_party(st.session_state.user_role)
-
-        if allowed_party == "Both":
-            selected_party = st.selectbox(
-                "Party",
-                ["Both", "RS", "Kangan","SM"],
-                index=["Both", "RS", "Kangan","SM"].index(st.session_state.party_filter),
-            )
-
-            if selected_party != st.session_state.party_filter:
-                st.session_state.party_filter = selected_party
-                st.rerun()
-        else:
-            st.info(f"Party: {st.session_state.party_filter}")
-
-        st.markdown("---")
-
-        # =========================
         # Navigation
         # =========================
         PAGES = {
-            "Dashboard": PAGE_DASHBOARD,
-            "Pick Orders": PAGE_PICKER,
-            "Validate Orders": PAGE_VALIDATOR,
-            "Search Orders": PAGE_SEARCH,
-            "Upload Orders": PAGE_ADMIN,
-            "Upload Return Scan": PAGE_RETURN_SCAN,
-            "Accept Returns": PAGE_ACCEPT_RETURNS,
-            "Cancelled List": PAGE_CANCELLED_LIST,
-            "Out of Stock List": PAGE_OUT_OF_STOCK_LIST,
             "LOOKUP": LOOKUP,
             "Label Image Stamper": LABEL_STAMPER,
-            "Delete": PAGE_DELETE,
         }
 
         ROLE_ACCESS = {
