@@ -203,24 +203,50 @@ function sendValue(value) {
   overlay.style.display = 'block';
   overlay.innerText = '✓ ' + value;
 
-  // Try direct DOM injection into parent
   try {
     const parentDoc = window.parent.document;
     const inputs = parentDoc.querySelectorAll('input[type="text"]');
+
     if (inputs.length > 0) {
       const input = inputs[0];
-      const setter = Object.getOwnPropertyDescriptor(
-        window.parent.HTMLInputElement.prototype, 'value'
-      ).set;
-      setter.call(input, value);
+
+      // React native setter
+      const nativeInputValueSetter =
+        Object.getOwnPropertyDescriptor(
+          window.parent.HTMLInputElement.prototype,
+          "value"
+        ).set;
+
+      nativeInputValueSetter.call(input, value);
+
+      // Important events for Streamlit/React
       input.dispatchEvent(new Event('input', { bubbles: true }));
-      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+
+      // Focus + Enter
+      input.focus();
+
+      nativeInputValueSetter.call(input, value);
+
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.dispatchEvent(new Event('change', { bubbles: true }));
+
+      input.focus();
+
+      setTimeout(() => {
+        input.blur();
+
+        setTimeout(() => {
+          input.focus();
+        }, 50);
+
+      }, 100);
+
       status.textContent = '✓ Sent: ' + value;
     }
   } catch(e) {
-    // Cross-origin fallback — post to parent
-    window.parent.postMessage({ type: 'barcode_scan', value: value }, '*');
-    status.textContent = '✓ Scanned: ' + value + ' (paste manually if needed)';
+    console.error(e);
+    status.textContent = '❌ Failed to inject';
   }
 
   setTimeout(stopScan, 1800);
