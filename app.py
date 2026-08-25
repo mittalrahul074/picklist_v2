@@ -35,6 +35,8 @@ LABEL_STAMPER = "label_stamper"
 # User types (document these clearly)
 USER_PICKER_ONLY = 1
 USER_RETURNS_ACCESS = {2, 3, 4, 5}
+#keep login feature off to allow any user and keep it on to restrict access to only those with login credentials
+LOGIN_FEATURE = 0
 
 # -------------------------------------------------------------------
 # PAGE CONFIG
@@ -147,28 +149,33 @@ def render_login_sidebar() -> None:
 
 def render_navigation_sidebar() -> None:
     with st.sidebar:
-        st.success(f"Logged in as {st.session_state.user_role}")
-        st.markdown("---")
+        if LOGIN_FEATURE:
+            st.success(f"Logged in as {st.session_state.user_role}")
+            st.markdown("---")
 
         # =========================
         # Navigation
         # =========================
         PAGES = {
-            "LOOKUP": LOOKUP,
             "Label Image Stamper": LABEL_STAMPER,
+            "LOOKUP": LOOKUP,
         }
 
-        ROLE_ACCESS = {
-            1: {"Dashboard", "Pick Orders","Validate Orders", "LOOKUP"}, # Picker only
-            2: {"Dashboard", "Validate Orders", "Search Orders", "Out of Stock List", "LOOKUP"}, # Returns access only
-            3: {"Dashboard", "Pick Orders", "Validate Orders", "Search Orders","Accept Returns", "Cancelled List","Upload Orders", "Upload Return Scan", "LOOKUP", "Label Image Stamper"}, # Full access except Admin
-            4: {"Dashboard", "Pick Orders", "Validate Orders", "Search Orders","Accept Returns", "Cancelled List","Upload Orders", "Upload Return Scan", "Delete", "Out of Stock List", "LOOKUP", "Label Image Stamper"}, # Full access except Admin
-            5: set(PAGES.keys()), # Admin has access to all pages
-        }
+        if LOGIN_FEATURE:
+            ROLE_ACCESS = {
+                1: {"Dashboard", "Pick Orders","Validate Orders", "LOOKUP"}, # Picker only
+                2: {"Dashboard", "Validate Orders", "Search Orders", "Out of Stock List", "LOOKUP"}, # Returns access only
+                3: {"Dashboard", "Pick Orders", "Validate Orders", "Search Orders","Accept Returns", "Cancelled List","Upload Orders", "Upload Return Scan", "LOOKUP", "Label Image Stamper"}, # Full access except Admin
+                4: {"Dashboard", "Pick Orders", "Validate Orders", "Search Orders","Accept Returns", "Cancelled List","Upload Orders", "Upload Return Scan", "Delete", "Out of Stock List", "LOOKUP", "Label Image Stamper"}, # Full access except Admin
+                5: set(PAGES.keys()), # Admin has access to all pages
+            }
 
-        user_type = st.session_state.user_type
-        print(f"USER TYPE: {user_type}")
-        allowed_pages = sorted(ROLE_ACCESS.get(user_type, {"Dashboard"}))
+            user_type = st.session_state.user_type
+            print(f"USER TYPE: {user_type}")
+            allowed_pages = sorted(ROLE_ACCESS.get(user_type, {"Dashboard"}))
+        else:
+            allowed_pages = sorted(PAGES.keys())
+
         print(f"ALLOWED PAGES: {allowed_pages}")
 
         selected_page = st.selectbox(
@@ -177,7 +184,7 @@ def render_navigation_sidebar() -> None:
             index=allowed_pages.index(
                 next(
                     (k for k, v in PAGES.items() if v == st.session_state.page),
-                    "LOOKUP",
+                    "Label Image Stamper",
                 )
             ),
         )
@@ -193,9 +200,12 @@ def render_navigation_sidebar() -> None:
 # -------------------------------------------------------------------
 # MAIN ENTRY
 # -------------------------------------------------------------------
-if not st.session_state.authenticated:
-    render_login_sidebar()
-    st.info("Please log in to access the system.")
+if LOGIN_FEATURE:
+    if not st.session_state.authenticated:
+        render_login_sidebar()
+        st.info("Please log in to access the system.")
+    else:
+        render_navigation_sidebar()
 else:
     render_navigation_sidebar()
 
