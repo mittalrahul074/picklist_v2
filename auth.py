@@ -1,29 +1,17 @@
 import streamlit as st
-from streamlit_cookies_manager import EncryptedCookieManager
+from streamlit_cookies_controller import CookieController
 from database import get_pass
-from passlib.hash import bcrypt
 
 
 # -------------------------------------------------
 # Cookie Manager
 # -------------------------------------------------
 def get_cookie_manager():
-    if "cookie_manager" in st.session_state:
-        return st.session_state.cookie_manager
 
-    if "auth_secret" not in st.secrets:
-        return None
+    if "cookie_manager" not in st.session_state:
+        st.session_state.cookie_manager = CookieController()
 
-    manager = EncryptedCookieManager(
-        prefix="oms_",
-        password=st.secrets["auth_secret"]
-    )
-
-    if not manager.ready():
-        return None
-
-    st.session_state.cookie_manager = manager
-    return manager
+    return st.session_state.cookie_manager
 
 
 # -------------------------------------------------
