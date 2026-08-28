@@ -168,7 +168,7 @@ def extract_sku_meesho(page_text: str) -> str | None:
     ]
     for i, line in enumerate(lines): 
         if ( line == "SKU"):
-            print (f"Found SKU line at index {i}: {line}")
+            # print (f"Found SKU line at index {i}: {line}")
             if(i + 10 < len(lines) and lines[i + 1] == "Size" and lines[i + 2] == "Qty" and lines[i + 3] == "Color" and "Order No" in lines[i + 4] ): 
                 sku = lines[i + 5] 
                 return sku
@@ -334,6 +334,20 @@ def crop_pdf(pdf_bytes: bytes,left,top,right,bottom) -> bytes:
     doc.close()
     print(f"PDF cropping time: {time.perf_counter() - t:.3f}s")
     return output_buf.getvalue()
+
+def clean_sku(sku):
+    if not sku:
+        return ""
+
+    sku = str(sku)
+
+    # Remove leading/trailing spaces and convert to uppercase
+    sku = sku.strip().upper()
+
+    # Remove invisible / whitespace characters
+    sku = re.sub(r"\s+", "", sku)
+
+    return sku
     
 def process_pdf_meesho(uploaded_bytes: bytes) -> tuple[bytes, list[dict]]:
     """
@@ -344,23 +358,20 @@ def process_pdf_meesho(uploaded_bytes: bytes) -> tuple[bytes, list[dict]]:
     Returns (modified_pdf_bytes, results_log).
     """
 
+    start = time.time()
     uploaded_bytes = crop_pdf(uploaded_bytes, 0, 0, 1, 0.5)
+    print("Crop:", time.time() - start)
     results = []
     page_sku_map = {}  # Track SKU for each page index
-
-    # --- Extract text (pdfplumber is better for text positions) ---
-    # page_texts = []
-    # with pdfplumber.open(io.BytesIO(uploaded_bytes)) as plumber_pdf:
-    #     for p in plumber_pdf.pages:
-    #         page_texts.append(p.extract_text() or "")
 
     # --- Modify PDF (PyMuPDF for image stamping) ---
     doc = fitz.open(stream=uploaded_bytes, filetype="pdf")
 
+    start = time.time()
     for i, page in enumerate(doc):
         text = page.get_text("text") or ""
         # text = page_texts[i] if i < len(page_texts) else ""
-        sku = extract_sku_meesho(text)
+        sku = clean_sku(extract_sku_meesho(text))
         # print(f"Page {i+1} - Extracted SKU: {sku}")
 
         if not sku:
@@ -370,12 +381,6 @@ def process_pdf_meesho(uploaded_bytes: bytes) -> tuple[bytes, list[dict]]:
 
         # img_bytes = download_image(image_url)
         img_bytes = get_barcode_image(sku)  # Use barcode image instead of product image
-        #save image for debugging in images folder with filename as order_id.png
-        # with tempfile.TemporaryDirectory() as tmpdir:
-        #     img_path = os.path.join(tmpdir, f"{sku}.png")
-        #     with open(img_path, "wb") as f:
-        #         f.write(img_bytes)
-        #     st.image(img_path, caption=f"Barcode for {sku}", width=200)
         if img_bytes:
             img_bytes = prepare_barcode_image_meesho(
                 img_bytes,
@@ -391,6 +396,8 @@ def process_pdf_meesho(uploaded_bytes: bytes) -> tuple[bytes, list[dict]]:
         results.append({"page": i + 1, "sku": sku, "status": status})
         page_sku_map[i] = (sku, i)
 
+    print("Processing time:", time.time() - start)
+    start = time.time()
     sorted_pages = sorted(page_sku_map.items(), key=lambda x: x[1][0], reverse=True)
     new_doc = fitz.open()
     sorted_indices = []
@@ -405,101 +412,12 @@ def process_pdf_meesho(uploaded_bytes: bytes) -> tuple[bytes, list[dict]]:
                 result["new_page"] = new_page_num + 1
                 results_sorted.append(result)
                 break
+    print("Sorting time:", time.time() - start)
 
     output_buf = io.BytesIO()
     new_doc.save(output_buf)
     new_doc.close()
     return output_buf.getvalue(), results_sorted
-
-# def process_pdf_meesho2(uploaded_bytes: bytes) -> tuple[bytes, list[dict]]:
-#     """
-#     Optimized: Single pass, efficient reordering, parallel image fetching.
-#     """
-#     uploaded_bytes = crop_pdf(uploaded_bytes, 0, 0, 1, 0.5)
-    
-#     doc = fitz.open(stream=uploaded_bytes, filetype="pdf")
-#     page_data = []  # List of (page_idx, sku, status, img_bytes)
-    
-#     # --- Single pass: extract text + process ---
-#     skus_to_fetch = []  # Collect SKUs first
-#     sku_map = {}  # sku -> list of page indices
-    
-#     with pdfplumber.open(io.BytesIO(uploaded_bytes)) as plumber_pdf:
-#         for i, p in enumerate(plumber_pdf.pages):
-#             text = p.extract_text() or ""
-#             sku = extract_sku_meesho(text)
-            
-#             if not sku:
-#                 page_data.append((i, None, "⚠️ SKU not found", None))
-#             else:
-#                 if sku not in sku_map:
-#                     skus_to_fetch.append(sku)
-#                     sku_map[sku] = []
-#                 sku_map[sku].append(i)
-#                 page_data.append((i, sku, None, None))  # Placeholder
-    
-#     # --- Batch fetch all images (parallel) ---
-#     from concurrent.futures import ThreadPoolExecutor, as_completed
-    
-#     img_cache = {}
-#     with ThreadPoolExecutor(max_workers=8) as executor:
-#         future_to_sku = {executor.submit(get_barcode_image, sku): sku for sku in skus_to_fetch}
-        
-#         for future in as_completed(future_to_sku):
-#             sku = future_to_sku[future]
-#             try:
-#                 img_bytes = future.result()
-#                 if img_bytes:
-#                     img_bytes = prepare_barcode_image_meesho(img_bytes, padding=5)
-#                 img_cache[sku] = img_bytes
-#             except Exception:
-#                 img_cache[sku] = None
-    
-#     # --- Stamp images on pages ---
-#     results = []
-#     for i, sku, status, _ in page_data:
-#         page = doc[i]
-        
-#         if status:  # SKU not found
-#             results.append({"original_page": i + 1, "sku": "—", "status": status})
-#             continue
-        
-#         img_bytes = img_cache.get(sku)
-        
-#         if not img_bytes:
-#             results.append({"original_page": i + 1, "sku": sku, "status": "❌ Image download failed"})
-#             continue
-        
-#         ok = stamp_image_on_page_meesho(page, img_bytes)
-#         status = "✅ Image added" if ok else "❌ Stamp failed"
-#         results.append({"original_page": i + 1, "sku": sku, "status": status})
-    
-#     # --- Efficient page reordering (delete unwanted pages, don't rebuild) ---
-#     sorted_indices = sorted(
-#         range(len(doc)),
-#         key=lambda i: (
-#             results[i]["sku"] == "—",  # SKU not found pages last
-#             results[i]["sku"]  # Then alphabetical
-#         ),
-#         reverse=True  # Reverse alphabetical
-#     )
-    
-#     # Delete pages in reverse order (to avoid index shifting)
-#     pages_to_delete = [i for i in range(len(doc)) if i not in sorted_indices]
-#     for i in sorted(pages_to_delete, reverse=True):
-#         doc.delete_page(i)
-    
-#     # Update results with new page numbers
-#     new_page_map = {old_idx: new_idx for new_idx, old_idx in enumerate(sorted_indices)}
-#     for result in results:
-#         orig_page = result["original_page"] - 1
-#         result["page"] = new_page_map.get(orig_page, -1) + 1
-    
-#     output_buf = io.BytesIO()
-#     doc.save(output_buf)
-#     doc.close()
-    
-#     return output_buf.getvalue(), results
 
 def process_pdf_flipkart(uploaded_bytes: bytes) -> tuple[bytes, list[dict]]:
     """
