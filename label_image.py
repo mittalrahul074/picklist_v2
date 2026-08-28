@@ -168,7 +168,7 @@ def extract_sku_meesho(page_text: str) -> str | None:
     ]
     for i, line in enumerate(lines): 
         if ( line == "SKU"):
-            print (f"Found SKU line at index {i}: {line}")
+            # print (f"Found SKU line at index {i}: {line}")
             if(i + 10 < len(lines) and lines[i + 1] == "Size" and lines[i + 2] == "Qty" and lines[i + 3] == "Color" and "Order No" in lines[i + 4] ): 
                 sku = lines[i + 5] 
                 return sku
@@ -358,13 +358,16 @@ def process_pdf_meesho(uploaded_bytes: bytes) -> tuple[bytes, list[dict]]:
     Returns (modified_pdf_bytes, results_log).
     """
 
+    start = time.time()
     uploaded_bytes = crop_pdf(uploaded_bytes, 0, 0, 1, 0.5)
+    print("Crop:", time.time() - start)
     results = []
     page_sku_map = {}  # Track SKU for each page index
 
     # --- Modify PDF (PyMuPDF for image stamping) ---
     doc = fitz.open(stream=uploaded_bytes, filetype="pdf")
 
+    start = time.time()
     for i, page in enumerate(doc):
         text = page.get_text("text") or ""
         # text = page_texts[i] if i < len(page_texts) else ""
@@ -393,6 +396,8 @@ def process_pdf_meesho(uploaded_bytes: bytes) -> tuple[bytes, list[dict]]:
         results.append({"page": i + 1, "sku": sku, "status": status})
         page_sku_map[i] = (sku, i)
 
+    print("Processing time:", time.time() - start)
+    start = time.time()
     sorted_pages = sorted(page_sku_map.items(), key=lambda x: x[1][0], reverse=True)
     new_doc = fitz.open()
     sorted_indices = []
@@ -407,6 +412,7 @@ def process_pdf_meesho(uploaded_bytes: bytes) -> tuple[bytes, list[dict]]:
                 result["new_page"] = new_page_num + 1
                 results_sorted.append(result)
                 break
+    print("Sorting time:", time.time() - start)
 
     output_buf = io.BytesIO()
     new_doc.save(output_buf)
