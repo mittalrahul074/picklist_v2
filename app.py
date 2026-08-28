@@ -11,7 +11,7 @@ from label_image import render_label_stamper_panel
 # -------------------------------------------------------------------
 # SUPPRESS WARNINGS (DEPENDENCY NOISE)
 # -------------------------------------------------------------------
-warnings.filterwarnings("ignore", message=".*st.cache.*deprecated.*")
+# warnings.filterwarnings("ignore", message=".*st.cache.*deprecated.*")
 
 # -------------------------------------------------------------------
 # CONSTANTS
