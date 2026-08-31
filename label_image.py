@@ -44,6 +44,7 @@ ORDER_IMAGE_FIELD   = "image_url"  # only used if IMAGE_ON_ORDER_DOC = True
 
 ORDER_ID_PATTERN = re.compile(r'\b(OD\d{15,20})\b')
 SKU_PATTERN = re.compile(r"\|\s*([^|]+?)\s*\|")
+sku_image_map = {}  # Cache for SKU → image bytes to avoid repeated downloads
 
 # ── Firebase helpers ──────────────────────────────────────────────────────────
 
@@ -85,7 +86,10 @@ def download_image(url: str) -> bytes | None:
 
 def get_barcode_image(sku: str) -> bytes | None:
     """Generate a barcode image for the SKU using an online API."""
+    if sku in sku_image_map:
+        return sku_image_map[sku]  # Return cached image bytes
     try:
+        start = time.perf_counter()
         # Using Barcode API from bwip-js (no API key required)
         api_url = (
             f"https://bwipjs-api.metafloor.com/"
@@ -97,6 +101,8 @@ def get_barcode_image(sku: str) -> bytes | None:
         )
         resp = requests.get(api_url, timeout=5)
         resp.raise_for_status()
+        print(f"Barcode fetch time for {sku}: {time.perf_counter() - start:.3f}s")
+        sku_image_map[sku] = resp.content  # Cache the image bytes
         return resp.content
     except Exception:
         return None
@@ -120,46 +126,6 @@ def extract_sku_flipkart(page_text: str) -> str | None:
         sku = sku[1:]
         return sku
     
-def extract_sku_meesho2(page_text: str) -> str | None:
-    lines = page_text.split("\n")
-
-    for i, line in enumerate(lines):
-        if "SKU" in line and "Order No" in line:
-            data_line = lines[i + 1].strip()
-
-            # Step 1: Extract Order ID (most reliable)
-            order_match = re.search(r'\d+_\d+', data_line)
-            if not order_match:
-                return None
-
-            order_id = order_match.group()
-
-            # Step 2: Remove order id from line
-            left_part = data_line.replace(order_id, "").strip()
-
-            # Step 3: Extract qty (number before last word = color)
-            qty_match = re.search(r'(\d+)\s+\w+$', left_part)
-            if not qty_match:
-                return None
-
-            qty = qty_match.group(1)
-
-            # Step 4: Remove "qty + color" from end
-            left_part = re.sub(r'\d+\s+\w+$', '', left_part).strip()
-
-            # Step 5: Now remove SIZE (last remaining word)
-            # remaining = SKU + SIZE → remove last word
-            parts = left_part.split()
-            if len(parts) < 2:
-                return None
-
-            parts = parts[:-2]  # remove last word (size)
-            sku = " ".join(parts)  # everything except last word = SKU
-            #split sku " "(space) and remove the last word
-            return sku
-
-    return None
-
 def extract_sku_meesho(page_text: str) -> str | None:
     lines = [
         line.strip()
@@ -369,16 +335,20 @@ def process_pdf_meesho(uploaded_bytes: bytes) -> tuple[bytes, list[dict]]:
 
     start = time.time()
     for i, page in enumerate(doc):
+        start_page = time.time()
         text = page.get_text("text") or ""
         # text = page_texts[i] if i < len(page_texts) else ""
-        sku = clean_sku(extract_sku_meesho(text))
+        print(f"Page {i+1} - Text extraction time: {time.time() - start_page:.3f}s")
+        start_sku = time.time()
+        sku = extract_sku_meesho(text)
         # print(f"Page {i+1} - Extracted SKU: {sku}")
 
         if not sku:
             results.append({"page": i + 1, "order_id": "—", "sku": "—", "status": "⚠️ SKU not found"})
             page_sku_map[i] = ("", i)  # Empty SKU, keep original index
             continue
-
+        print(f"Page {i+1} - SKU extraction time: {time.time() - start_sku:.3f}s")
+        start_sku = time.time()
         # img_bytes = download_image(image_url)
         img_bytes = get_barcode_image(sku)  # Use barcode image instead of product image
         if img_bytes:
@@ -390,8 +360,10 @@ def process_pdf_meesho(uploaded_bytes: bytes) -> tuple[bytes, list[dict]]:
             results.append({"page": i + 1, "sku": sku, "status": "❌ Image download failed"})
             page_sku_map[i] = (sku, i)
             continue
-
+        print(f"Page {i+1} - Image preparation time: {time.time() - start_sku:.3f}s")
+        start_stamp = time.time()
         ok = stamp_image_on_page_meesho(page, img_bytes)
+        print(f"Page {i+1} - Stamp time: {time.time() - start_stamp:.3f}s")
         status = "✅ Image added" if ok else "❌ Stamp failed"
         results.append({"page": i + 1, "sku": sku, "status": status})
         page_sku_map[i] = (sku, i)
